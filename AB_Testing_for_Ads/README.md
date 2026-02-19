@@ -463,33 +463,6 @@ This project complements other marketing analytics work:
 
 ---
 
-## 🎤 Interview Talking Points
-
-### 30-Second Elevator Pitch
-"I designed and analyzed an Instagram A/B test with 100K impressions across 4 ad variants. Using sequential testing with Bonferroni correction, I found Ad A had the highest CTR at 5.05% and that statistical significance emerged by Round 2. However, the underperforming Ad B ran through all 10 rounds, costing approximately $10,000 in lost revenue. I recommended implementing multi-armed bandit methodology to automatically stop underperformers early, which could reduce sample sizes by 30-40% while maintaining statistical rigor."
-
-### 2-Minute Deep Dive
-"A company was testing 4 Instagram ad creatives and needed to know which performed best and when to stop testing. I analyzed 100,000 impressions equally split across the variants.
-
-First, I used proportion tests to compare CTRs. Ad A performed best at 5.05%, significantly higher than Ad B at 3.10%. The overall chi-square test was highly significant (p < 0.001), and Bonferroni-corrected pairwise tests confirmed Ad A outperformed all others.
-
-Then I analyzed revenue using ANOVA and Tukey HSD. Ad C generated the most revenue per conversion at $3.59, compared to Ad B at just $2.58.
-
-The key insight came from sequential testing. I divided the data into 10 rounds of 10,000 impressions each and tested for significance at each stage. By Round 2—after just 20% of data collection—the difference between Ad A and Ad B was already highly significant (p < 0.0001).
-
-However, the test ran through all 10 rounds with equal allocation. This meant 20,000 additional impressions were wasted on Ad B after we already had strong evidence it underperformed. I calculated this cost the campaign approximately $10,000 in potential revenue.
-
-My recommendation: implement a multi-armed bandit framework that automatically reduces traffic to underperformers once statistical thresholds are reached. This would reduce sample size requirements by 30-40% while maintaining the same statistical confidence."
-
-### Technical Deep-Dive Topics
-1. **Why Bonferroni correction?** → Controls family-wise error rate in multiple comparisons
-2. **How did you determine sample size?** → Power analysis for 80% power to detect 1pp difference
-3. **What's the difference between MAB and traditional A/B?** → MAB adapts allocation based on interim results
-4. **How would you implement this in production?** → Sequential testing with automated stopping rules
-5. **What about longer-term effects?** → Could extend to cohort analysis or survival analysis
-
----
-
 ## 📊 Results Summary
 
 ### Statistical Findings
