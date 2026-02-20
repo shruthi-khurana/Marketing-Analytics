@@ -1,0 +1,420 @@
+---
+title: "401_Case3"
+author: "Shruthi Khurana, Priyanka Nayyar"
+date: "2025-11-18"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary : 
+Our pricing trial for United Airlines flight 396 from San Francisco to Honolulu showed that we consistently overestimated demand throughout the booking period. We started with 170 seats available five weeks before takeoff and set prices using a demand model built from historical data. However, we undersold our forecasts every single week—for example, we predicted 38.44 seats would sell in week 5 but only sold 30. By the time the flight took off, we had sold 155 seats total, leaving 15 empty seats that could have generated revenue. Initially at T-5, our model predicted we could achieve $87,877 in total revenue while selling out completely. Instead, because we kept selling fewer seats than expected, we had to keep lowering our prices at each reforecast to try to fill the remaining seats. By the final week, we dropped the price to $450.82 compared to the $566.44 we originally planned. These results clearly show our forecasting model needs an adjustment mechanism to account for weeks when we over or underperform our predictions.
+
+## Description of analysis run : 
+For this analysis, we built a linear regression model using historical flight data to understand how pricing affects seat sales. Our model included price variables for each of the five weeks before takeoff (Pt_5 through Pt_1), indicator variables for which week we're in (weeks before departure), and seasonal dummies to capture demand patterns across Spring, Summer, and Fall. After estimating the model with lm(), we used the coefficients to set up a revenue optimization problem. The key insight from the model was that price sensitivity changes depending on how far out from the flight you are—customers booking 5 weeks out are much more price-sensitive (-0.284) than those booking last-minute (-0.134). We then used R's optim() function to find the prices that would maximize revenue while staying within our capacity constraint. We ran this optimization five separate times—once at each weekly decision point—updating our remaining capacity each time based on how many seats we actually sold. For Part 2, we adjusted the model intercept by subtracting the Week 5 underselling amount (8.44 units) and re-ran the optimization from Week 4 onward to test whether this adaptive forecasting rule could improve performance.
+
+
+## PART 1 Original Trial
+**Observation**
+The regression results show some interesting patterns in customer behavior. The intercept of 89.90 gives us a baseline level of demand, and the Summer seasonal effect (+15.34) tells us that our June flight benefits from higher demand compared to other seasons. Looking at the price coefficients, we can see that customers become less price-sensitive as the flight gets closer—the coefficient for week 5 pricing is -0.284 versus only -0.134 for week 1 pricing. This makes intuitive sense since people booking last-minute often need to travel regardless of price. The week indicators show that demand is naturally higher when we're further from departure (W4 and W5 both have coefficients around +70), likely because more people are still in their planning phase. When we compare our forecasts to actual performance, the problem becomes clear: we predicted 38.44 seats would sell in week 5 but only sold 30, creating an 8.44 unit gap. This pattern continued throughout, forcing us to progressively lower prices to try to move inventory. The 15 unsold seats at takeoff represent lost revenue opportunity and suggest our historical data may have overestimated current market conditions or that something about this particular flight was different from the historical pattern we used to build our model.RetryClaude can make mistakes. Please double-check responses.
+
+
+```{r}
+# Importing dataset
+library(readxl)
+
+Inventory <- read_excel("InventoryCase3.xlsx")
+
+# Create price tier columns populated with actual prices
+Inventory$Pt_5 <- ifelse(Inventory$`Weeks Before` == 5, Inventory$Price, 0)
+Inventory$Pt_4 <- ifelse(Inventory$`Weeks Before` == 4, Inventory$Price, 0)
+Inventory$Pt_3 <- ifelse(Inventory$`Weeks Before` == 3, Inventory$Price, 0)
+Inventory$Pt_2 <- ifelse(Inventory$`Weeks Before` == 2, Inventory$Price, 0)
+Inventory$Pt_1 <- ifelse(Inventory$`Weeks Before` == 1, Inventory$Price, 0)
+
+# Create Season variable based on month
+# Spring (March-May), Summer (June-Aug), Fall (Sept-Nov)
+library(dplyr)
+Inventory$Season <- case_when(
+  Inventory$Month_of_Flight %in% c("Mar", "Apr", "May") ~ "Spring",
+  Inventory$Month_of_Flight %in% c("Jun", "Jul", "Aug") ~ "Summer",
+  Inventory$Month_of_Flight %in% c("Sep", "Oct", "Nov") ~ "Fall",
+  TRUE ~ "Other"  # For Jan, Feb, Dec 
+)
+
+# Create season dummy variables
+Inventory$Season_Spring <- ifelse(Inventory$Season == "Spring", 1, 0)
+Inventory$Season_Summer <- ifelse(Inventory$Season == "Summer", 1, 0)
+Inventory$Season_Fall <- ifelse(Inventory$Season == "Fall", 1, 0)
+
+# Running the Regression 
+model <- lm(`Seats Sold` ~ Pt_5 + Pt_4 + Pt_3 + Pt_2 + Pt_1 + 
+            factor(`Weeks Before`) + Season_Spring + Season_Summer + Season_Fall, 
+            data = Inventory)
+
+print(model)
+
+```
+
+
+
+```{r}
+# Storing model coefficients
+C <- coef(model)
+
+# Creating the Objective Function
+TotalRevenue <- function(pars, target_seats){
+
+  
+  total_seats <- 0
+  total_revenue <- 0
+  
+  for(i in 1:length(pars)){
+    week_num <- i 
+    price <- pars[i]
+  
+  # Get predictions of seats
+   if(week_num == 5 ){
+      seats <- C["(Intercept)"] + C["Season_Summer"] + 
+               C["Pt_5"]*price + C["factor(`Weeks Before`)5"]
+    } else if(week_num == 4){
+      seats <- C["(Intercept)"] + C["Season_Summer"] + 
+               C["Pt_4"]*price + C["factor(`Weeks Before`)4"]
+    } else if(week_num == 3){
+      seats <- C["(Intercept)"] + C["Season_Summer"] + 
+               C["Pt_3"]*price + C["factor(`Weeks Before`)3"]
+    } else if(week_num == 2){
+      seats <- C["(Intercept)"] + C["Season_Summer"] + 
+               C["Pt_2"]*price + C["factor(`Weeks Before`)2"]
+    } else { # week_num == 1
+      seats <- C["(Intercept)"] + C["Season_Summer"] + 
+               C["Pt_1"]*price
+    }
+  
+  
+  if (any(!is.finite(seats)) || any(seats < 0)) 
+    return(1e30)
+  
+  
+  total_seats <- total_seats + seats
+  total_revenue <- total_revenue + seats * price
+  }
+  penalty <- 10000 * (total_seats - target_seats)^2
+  
+  return(-(total_revenue) + penalty)
+  
+}
+
+# Create lists to store results
+results <- list()
+
+# Optimising W5
+w5<-optim(
+  par = c(450,450,450,450,450),
+  fn = TotalRevenue,
+  target_seats = 170
+)
+
+# Optimising W4
+w4<-optim(
+  par = c(450,450,450,450),
+  fn = TotalRevenue,
+  target_seats = 140
+)
+
+# Optimising W3
+w3<-optim(
+  par = c(450,450,450),
+  fn = TotalRevenue,
+  target_seats = 105
+)
+
+# Optimising W2
+w2<-optim(
+  par = c(450,450),
+  fn = TotalRevenue,
+  target_seats = 75
+)
+
+# Optimising W1
+w1<-optim(
+  par = c(450),
+  fn = TotalRevenue,
+  target_seats = 45
+)
+
+```
+
+```{r}
+# Report you set of Optimized prices and total revenue as forecasted each week -
+
+library(knitr)
+
+summary_df <- data.frame(
+  Forecast_Point = c("T-5", "T-4", "T-3", "T-2", "T-1"),
+  Seats_Remaining = c(170, 140, 105, 75, 45),
+  Price_Wk5 = c(round(w5$par[5], 2), NA, NA, NA, NA),
+  Price_Wk4 = c(round(w5$par[4], 2), round(w4$par[4], 2), 
+                NA, NA, NA),
+  Price_Wk3 = c(round(w5$par[3], 2), round(w4$par[3], 2), 
+                round(w3$par[3], 2), NA, NA),
+  Price_Wk2 = c(round(w5$par[2], 2), round(w4$par[2], 2), 
+                round(w3$par[2], 2), round(w2$par[2], 2), NA),
+  Price_Wk1 = c(round(w5$par[1], 2), round(w4$par[1], 2), 
+                round(w3$par[1], 2), round(w2$par[1], 2), round(w1$par, 2)),
+  Forecasted_Revenue = c(round(-w5$value, 2), round(-w4$value, 2), 
+                         round(-w3$value, 2), round(-w2$value, 2), 
+                         round(-w1$value, 2))
+)
+
+kable(summary_df)
+
+# Seats forecasted in W5 vs actually sold - 
+
+# Seats forecasted in week 5 for week 5-
+seats5<-C["(Intercept)"] + C["Season_Summer"] + 
+        C["Pt_5"]*w5$par[5] + C["factor(`Weeks Before`)5"]
+
+# Seats forecasted in week 5 for week 4-
+seats4<-C["(Intercept)"] + C["Season_Summer"] + 
+        C["Pt_4"]*w5$par[4] + C["factor(`Weeks Before`)4"]
+
+# Seats forecasted in week 5 for week 3-
+seats3<-C["(Intercept)"] + C["Season_Summer"] + 
+        C["Pt_3"]*w5$par[3] + C["factor(`Weeks Before`)3"]
+
+# Seats forecasted in week 5 for week 2-
+seats2<-C["(Intercept)"] + C["Season_Summer"] + 
+        C["Pt_2"]*w5$par[2] + C["factor(`Weeks Before`)2"]
+
+# Seats forecasted in week 5 for week 1 -
+seats1<-C["(Intercept)"] + C["Season_Summer"] + 
+        C["Pt_1"]*w5$par[1]
+
+# Forecasted vs Sold
+cat("Original T-5 Forecast vs Actual:\n")
+cat("Week 5: Forecasted", round(seats5, 2), 
+    "| Actual 30 | Diff:", round(seats5 - 30, 2), "\n")
+cat("Week 4: Forecasted", round(seats4, 2), 
+    "| Actual 35 | Diff:", round(seats4 - 35, 2), "\n")
+cat("Week 3: Forecasted", round(seats3, 2), 
+    "| Actual 30 | Diff:", round(seats3 - 30, 2), "\n")
+cat("Week 2: Forecasted", round(seats2, 2), 
+    "| Actual 30 | Diff:", round(seats2 - 30, 2), "\n")
+cat("Week 1: Forecasted", round(seats1, 2), 
+    "| Actual 30 | Diff:", round(seats1 - 30, 2), "\n")
+
+cat("\nTotal Forecasted:", 
+    round(sum(c(seats5, seats4, seats3, seats2, seats1)), 2), "\n")
+cat("Total Actual:", 155, "\n")
+cat("Unsold seats:", 15, "\n")
+```
+
+
+## PART 2
+**Observation**
+The adjusted forecasting model demonstrates significant performance improvement over our original approach. By reducing the intercept by 8.44 units (the Week 5 underselling amount), we recalibrated our demand expectations and achieved better price optimization. The comparison shows that if this adjusted model had been perfectly accurate, we would have sold 15 additional seats (140 vs. 125) and generated $5,678 more in revenue ($65,598 vs. $59,919). The adjusted prices tell an interesting story: we dropped prices substantially in Weeks 4 and 3 (by $37 and $27 respectively) where customers are most price-sensitive (-0.283 and -0.196 coefficients), which drove 9.92 and 4.01 more seat sales in those weeks. Conversely, we increased the Week 1 price by $49 to capitalize on last-minute bookers who are relatively price-insensitive (-0.134 coefficient). This strategic reallocation—selling more seats early at lower prices and fewer seats later at premium prices—maximized total revenue while achieving near-perfect capacity utilization (140.01 of 140 target seats).
+
+
+```{r}
+# Seats forecasted from Part 1 in W5-
+seats5
+
+undersell5 <- seats5 - 30
+
+C_adjusted <- C
+C_adjusted["(Intercept)"] <- C["(Intercept)"] - undersell5
+
+# New objective function starting W4
+
+TotalRevenue_adjusted <- function(pars, target_seats){
+  total_seats <- 0
+  total_revenue <- 0
+  
+  for(i in 1:length(pars)){
+    week_num <- i 
+    price <- pars[i]
+  
+  # Get predictions of seats
+    if(week_num == 4){
+      seats <- C_adjusted["(Intercept)"] + C_adjusted["Season_Summer"] +
+               C_adjusted["Pt_4"]*price + C_adjusted["factor(`Weeks Before`)4"]
+    } else if(week_num == 3){
+      seats <- C_adjusted["(Intercept)"] + C_adjusted["Season_Summer"] +
+               C_adjusted["Pt_3"]*price + C_adjusted["factor(`Weeks Before`)3"]
+    } else if(week_num == 2){
+      seats <- C_adjusted["(Intercept)"] + C_adjusted["Season_Summer"] +
+               C_adjusted["Pt_2"]*price + C_adjusted["factor(`Weeks Before`)2"]
+    } else { # week_num == 1
+      seats <- C_adjusted["(Intercept)"] + C_adjusted["Season_Summer"] +
+               C_adjusted["Pt_1"]*price
+    }
+  
+  
+  if (any(!is.finite(seats)) || any(seats < 0)) 
+    return(1e30)
+  
+  
+  total_seats <- total_seats + seats
+  total_revenue <- total_revenue + seats * price
+  }
+  penalty <- 10000 * (total_seats - target_seats)^2
+  
+  return(-(total_revenue) + penalty)
+  
+}
+
+# Running new optimization for W4 after adjustment
+w4_adjusted <- optim(
+  par = c(450,450,450,450), 
+  fn = TotalRevenue_adjusted, 
+  target_seats = 140)
+w4_adjusted
+
+
+# Comparison of Part 1 actuals with Part 2 adjusted forecast :
+
+# Actual performance from Part 1 (weeks 4, 3, 2, 1 only)
+actual_sales_w4_to_w1 <- c(35, 30, 30, 30)
+prices_used_w4_to_w1 <- c(w4$par[4], w3$par[3], w2$par[2], w1$par[1])
+
+actual_revenue_w4_to_w1 <- actual_sales_w4_to_w1 * prices_used_w4_to_w1
+total_actual_revenue_part1 <- sum(actual_revenue_w4_to_w1)
+total_actual_seats_part1 <- sum(actual_sales_w4_to_w1)
+
+# Forecasted seats and revenue from W4_adjusted at T-4:
+seats4_adjusted <- C_adjusted["(Intercept)"] + 
+                   C_adjusted["Season_Summer"] +
+                   C_adjusted["Pt_4"]*w4_adjusted$par[4] + 
+                   C_adjusted["factor(`Weeks Before`)4"]
+
+seats3_adjusted <- C_adjusted["(Intercept)"] + 
+                   C_adjusted["Season_Summer"] +  
+                   C_adjusted["Pt_3"]*w4_adjusted$par[3] + 
+                   C_adjusted["factor(`Weeks Before`)3"]
+
+seats2_adjusted <- C_adjusted["(Intercept)"] + 
+                   C_adjusted["Season_Summer"] + 
+                   C_adjusted["Pt_2"]*w4_adjusted$par[2] + 
+                   C_adjusted["factor(`Weeks Before`)2"]
+
+seats1_adjusted <- C_adjusted["(Intercept)"] + 
+                   C_adjusted["Season_Summer"] + 
+                   C_adjusted["Pt_1"]*w4_adjusted$par[1] 
+
+total_forecasted_seats_w4adj <- seats1_adjusted + 
+                                seats2_adjusted + 
+                                seats3_adjusted + 
+                                seats4_adjusted
+
+total_forecasted_revenue_w4adj <- seats1_adjusted*w4_adjusted$par[1] +
+                                  seats2_adjusted*w4_adjusted$par[2] +
+                                  seats3_adjusted*w4_adjusted$par[3] +
+                                  seats4_adjusted*w4_adjusted$par[4]
+```
+
+
+**Compare two sets of numbers: (1) your actual performance in terms of seats sold and revenue from weeks T-4 through T-1 from part 1 (not your forecast), and (2) your new forecast from part 2. **
+Comparing our actual Part 1 performance against the adjusted Part 2 forecast reveals significant missed opportunity. In Part 1, we actually sold 125 seats across weeks T-4 through T-1, generating $59,919 in revenue with the prices we set at each reforecast point. The adjusted model forecasts we could have sold 140 seats and earned $65,598—a difference of 15 additional seats and $5,678 in revenue. The performance gap was largest in Week 4, where better pricing could have captured 9.92 more seats and $2,996 more revenue. Even in Week 1, despite selling the same number of seats (30), the adjusted model's higher optimal price ($499.96 vs. $450.82) would have generated $1,473 additional revenue. This comparison demonstrates that our systematic forecast overestimation in Part 1 led us to set suboptimal prices that left both seats and revenue on the table.
+
+
+```{r}
+library(knitr)
+
+# Create comparison table
+comparison_table <- data.frame(
+  Week = c(4, 3, 2, 1, "TOTAL"),
+  
+  Part1_Actual_Seats = c(actual_sales_w4_to_w1, total_actual_seats_part1),
+  Part1_Price = c(round(prices_used_w4_to_w1, 2), ""),
+  Part1_Revenue = c(round(actual_revenue_w4_to_w1, 2), round(total_actual_revenue_part1, 2)),
+  
+  Part2_Forecasted_Seats = c(round(c(seats4_adjusted, 
+                                     seats3_adjusted, seats2_adjusted,
+                                     seats1_adjusted), 2),
+                             round(total_forecasted_seats_w4adj, 2)),
+  Part2_Price = c(round(w4_adjusted$par[c(4,3,2,1)], 2), ""),
+  Part2_Revenue = c(round(c(seats4_adjusted * w4_adjusted$par[4],
+                             seats3_adjusted * w4_adjusted$par[3],
+                             seats2_adjusted * w4_adjusted$par[2],
+                             seats1_adjusted * w4_adjusted$par[1]), 2), 
+                    round(total_forecasted_revenue_w4adj, 2)),
+  
+  Seats_Difference = c(round(c(seats4_adjusted - actual_sales_w4_to_w1[1],
+                               seats3_adjusted - actual_sales_w4_to_w1[2],
+                               seats2_adjusted - actual_sales_w4_to_w1[3],
+                               seats1_adjusted - actual_sales_w4_to_w1[4]), 2),
+                       round(total_forecasted_seats_w4adj - total_actual_seats_part1, 2)),
+  
+  Revenue_Difference = c(
+  round(c(
+    seats4_adjusted * w4_adjusted$par[4] - actual_revenue_w4_to_w1[1],
+    seats3_adjusted * w4_adjusted$par[3] - actual_revenue_w4_to_w1[2],
+    seats2_adjusted * w4_adjusted$par[2] - actual_revenue_w4_to_w1[3],
+    seats1_adjusted * w4_adjusted$par[1] - actual_revenue_w4_to_w1[4]
+  ), 2),
+  round(total_forecasted_revenue_w4adj - total_actual_revenue_part1, 2)))
+
+kable(comparison_table, 
+      col.names = c("Week", 
+                    "Actual Seats", "Actual Price", "Actual Revenue",
+                    "Adjusted Seats", "Adjusted Price", "Adjusted Revenue",
+                    "Seats Diff", "Revenue Diff"),
+      caption = "Part 1 vs Part 2: Actual Performance vs Adjusted Forecast (Weeks 4-1)",
+      align = c('c', 'c', 'c', 'c', 'c', 'c', 'c', 'c', 'c'))
+```
+
+
+**If your new forecasting model had been implemented in part 1, and was perfectly accurate, how many more seats would you have sold and how much more revenue would you have generated versus your actual performance in part 1? Explain why this new approach has the potential to perform better-**
+
+We would have sold 15 more seats, completing the whole target of 140 at T-4 as compared to actual seats sold at 125. 
+
+Revenue would've been higher by $5,678.44 ($65,597.50 - $59,919.06)
+
+**Why this model has potential?**
+The original model consistently overforecasted demand and seats to be sold. By making the intercept adjustment in Part 2 we are lowering prices earlier to sell more seats.
+
+This adjustment approach has broader potential because it's self-correcting regardless of direction. If we had oversold instead of undersold in W5, we would add to the intercept and raise prices. The rule creates a feedback loop that adapts to current market conditions that differ from historical patterns, whether demand is stronger or weaker than expected.
+
+**Compare seats sold and prices by week, and explain why the optimization routine changed prices the way it did, given how price sensitivity varies by weeks until takeoff.** 
+The optimization routine strategically adjusted prices based on each week's price sensitivity to maximize total revenue. In Week 4, where customers are most price-sensitive (coefficient of -0.283), the adjusted model dropped the price by $37.33 (from $471.11 to $433.78), which stimulated demand and resulted in 9.92 additional forecasted seats sold. Similarly, in Week 3 with a sensitivity of -0.196, prices decreased by $27.22 to capture 4.01 more seats. Week 2 saw a modest $10.98 price reduction given its lower sensitivity (-0.133), adding just 1.08 seats. Most notably, the adjusted model increased Week 1 pricing by $49.14 (from $450.82 to $499.96) because last-minute customers are least price-sensitive (-0.134), allowing us to extract maximum revenue from final-week inventory. This demonstrates how the optimizer reallocates pricing power: lower prices early to capture volume from price-sensitive planners, and premium prices late to capitalize on time-constrained buyers who will pay regardless.
+
+
+```{r}
+library(knitr)
+
+# Price comparison table with seats sold
+price_comparison <- data.frame(
+  Week = c(4, 3, 2, 1),
+  Part1_Actual_Price = c(471.11, 476.67, 520.19, 450.82),
+  Part1_Actual_Seats = c(35, 30, 30, 30),
+  Part2_Adjusted_Price = c(433.78, 449.45, 509.21, 499.96),
+  Part2_Adjusted_Seats = c(44.92, 34.01, 31.08, 30.00),
+  Price_Difference = c(433.78 - 471.11, 449.45 - 476.67, 509.21 - 520.19, 499.96 - 450.82),
+  Seats_Difference = c(44.92 - 35, 34.01 - 30, 31.08 - 30, 30.00 - 30),
+  Price_Sensitivity_Coefficient = c(-0.283, -0.196, -0.133, -0.134)
+)
+
+kable(price_comparison,
+      col.names = c("Week", 
+                    "Part 1 Price", "Part 1 Seats",
+                    "Part 2 Price", "Part 2 Seats",
+                    "Price Diff ($)", "Seats Diff",
+                    "Price Sensitivity"),
+      caption = "Price and Seats Comparison: Part 1 vs Part 2 Adjusted Model",
+      align = c('c', 'c', 'c', 'c', 'c', 'c', 'c', 'c'))
+```
+
+**Explain why the optimization routine changed prices the way it did, given how price sensitivity varies by weeks until takeoff.**
+
+Customers with more time in hand before takeoff are driven by price slashes and discounts and are called more price sensitive (as evidenced by higher absolute value of price sensitivities in W4 and W3). The adjusted model dropped the price by $37 and $27 in Week 4 and week 3 respectively. This drove demand significantly up in Week 4 causing 9 more seats to be sold and getting $3000 more in revenue. 
+
+And model 2 increased the price by almost $50 in the last week to capture most revenue out of least price sensitive segment.
+
+The adjusted model also raised W1 price by $49 (from $450.82 to $499.96) because last-minute customers are least price-sensitive (-0.134), allowing us to capture maximum revenue from the final week's inventory.
+
+
+
+
